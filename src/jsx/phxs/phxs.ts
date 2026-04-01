@@ -167,11 +167,10 @@ const placeOrderDesign = (doc: any, order: Order, yOffset: number, dpi: number) 
     const xArtworkStart = xStart + mmToPx(borderLeft_mm, dpi);
     const yArtworkStart = yOffset + mmToPx(BORDER_TOP_MM, dpi);
 
-    // POSITIONING
-    // MIRROR IF REQUESTED (Horizontal Mirror for logo flip)
+    // MIRROR IF REQUESTED (Vertical Mirror)
     if (order.mirror) {
       //@ts-ignore
-      designLayer.resize(-100, 100, AnchorPosition.MIDDLECENTER);
+      designLayer.resize(100, -100, AnchorPosition.MIDDLECENTER);
     }
 
     // Capture bounds relative to current state
@@ -179,15 +178,8 @@ const placeOrderDesign = (doc: any, order: Order, yOffset: number, dpi: number) 
     const scaledW = Number(scaledBounds[2]) - Number(scaledBounds[0]);
     const scaledH = Number(scaledBounds[3]) - Number(scaledBounds[1]);
 
-    // X: Align Left (protect logo) OR Right (protect flipped logo)
-    let targetX_px = xArtworkStart;
-    if (order.mirror) {
-      // Mirror means logo is now on the right, so anchor to the right edge
-      const xArtworkEnd = xArtworkStart + artW_px;
-      targetX_px = xArtworkEnd - scaledW;
-    }
-    
-    const targetTranslateX = targetX_px - Number(scaledBounds[0]);
+    // X: Always Align Left (vertical mirror keeps logo on the left)
+    const targetTranslateX = xArtworkStart - Number(scaledBounds[0]);
     
     // Y: Center Vertically (distribute height overflow equally)
     const yOverflow = scaledH - artH_px;
