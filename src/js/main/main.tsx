@@ -5,7 +5,7 @@ import {
   subscribeBackgroundColor,
 } from "../lib/utils/bolt";
 import { auditOrders, generateBatch, printAllDocuments } from "../features/printing";
-import { replaceImageInMockup, auditGenerateImagesOrders, debugLayerTree, uploadToR2, clearR2Prefix, clearAllR2, exportOrdersWithUrls } from "../features/generateImages";
+import { replaceImageInMockup, auditGenerateImagesOrders, debugLayerTree, getSelectedLayerBounds, uploadToR2, clearR2Prefix, clearAllR2, exportOrdersWithUrls } from "../features/generateImages";
 import { ColorMapping } from "../../shared/generateImages";
 import { Order, Mapping, OrderStats } from "../../shared/shared";
 import "./main.scss";
@@ -292,8 +292,6 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [logs, setLogs] = useState<{ text: string; type: "info" | "success" | "warning" | "error" }[]>([]);
   const [testOrder, setTestOrder] = useState<any>(null);
-  const [showColorSettings, setShowColorSettings] = useState(false);
-  const [colorMappings, setColorMappings] = useState<{name: string; folder: string}[]>([]);
 
   useEffect(() => {
     setCsvPath(localStorage.getItem("genImagesCsvPath") || "");
@@ -301,51 +299,7 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
     setMockupsPath(localStorage.getItem("genImagesMockupsPath") || "");
     setDesignsPath(localStorage.getItem("genImagesDesignsPath") || "");
     setOutputPath(localStorage.getItem("genImagesOutputPath") || "");
-    loadColorMappings();
   }, []);
-
-  const loadColorMappings = () => {
-    const saved = localStorage.getItem("genImagesColorMappings");
-    if (saved) {
-      setColorMappings(JSON.parse(saved));
-    } else {
-      const defaults = [
-        { name: "zwart", folder: "Black" },
-        { name: "zwarte", folder: "Black" },
-        { name: "bruin", folder: "Brown" },
-        { name: "bruine", folder: "Brown" },
-        { name: "beige", folder: "Beige" },
-        { name: "rood", folder: "Red" },
-        { name: "blauw", folder: "Blue" },
-        { name: "groen", folder: "Green" },
-        { name: "geel", folder: "Yellow" },
-      ];
-      setColorMappings(defaults);
-      localStorage.setItem("genImagesColorMappings", JSON.stringify(defaults));
-    }
-  };
-
-  const saveColorMappings = (mappings: {name: string; folder: string}[]) => {
-    setColorMappings(mappings);
-    localStorage.setItem("genImagesColorMappings", JSON.stringify(mappings));
-  };
-
-  const addColorMapping = () => {
-    const newMappings = [...colorMappings, { name: "", folder: "" }];
-    saveColorMappings(newMappings);
-  };
-
-  const updateColorMapping = (index: number, field: "name" | "folder", value: string) => {
-    const newMappings = colorMappings.map((m, i) => 
-      i === index ? { ...m, [field]: value } : m
-    );
-    saveColorMappings(newMappings);
-  };
-
-  const deleteColorMapping = (index: number) => {
-    const newMappings = colorMappings.filter((_, i) => i !== index);
-    saveColorMappings(newMappings);
-  };
 
   const clearOutputFolder = async (folderPath: string) => {
     const { fs } = await import("../lib/cep/node");
@@ -452,6 +406,26 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
         addLog("Layer tree:\n" + (result.layers || ""), "info");
       } else {
         addLog("Debug failed: " + result.error, "error");
+      }
+    } catch (err: any) {
+      addLog(`Error: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGetLayerBounds = async () => {
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Getting selected layer bounds...", "info");
+
+    try {
+      const result = await getSelectedLayerBounds();
+      if (result.success) {
+        addLog(`Layer: ${result.name}`, "info");
+        addLog(`Bounds: ${result.width}x${result.height} at (${result.left}, ${result.top})`, "info");
+      } else {
+        addLog("Get bounds failed: " + result.error, "error");
       }
     } catch (err: any) {
       addLog(`Error: ${err.message}`, "error");
@@ -613,50 +587,13 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
         <button className="debug-btn" disabled={isProcessing} onClick={handleDebug}>
           Debug Layers
         </button>
-        <button className="gen-settings-btn" onClick={() => setShowColorSettings(true)}>
-          🎨 Colors
+        <button className="gen-settings-btn" disabled={isProcessing} onClick={handleGetLayerBounds}>
+          Get Layer Bounds
         </button>
         <button className="generate-btn" disabled={isProcessing} onClick={handleGenerate}>
           {isProcessing ? "Processing..." : "Generate Images"}
         </button>
       </div>
-
-      {showColorSettings && (
-        <div className="modal-overlay" onClick={() => setShowColorSettings(false)}>
-          <div className="modal-content color-settings-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Color Mappings</h3>
-              <button className="modal-close" onClick={() => setShowColorSettings(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <p className="mapping-hint">Map color names from CSV to folder names</p>
-              <div className="color-mappings-list">
-                {colorMappings.map((mapping, idx) => (
-                  <div key={idx} className="color-mapping-row">
-                    <input
-                      type="text"
-                      placeholder="Color name (e.g. zwarte)"
-                      value={mapping.name}
-                      onChange={(e) => updateColorMapping(idx, "name", e.target.value)}
-                    />
-                    <span className="arrow">→</span>
-                    <input
-                      type="text"
-                      placeholder="Folder (e.g. Black)"
-                      value={mapping.folder}
-                      onChange={(e) => updateColorMapping(idx, "folder", e.target.value)}
-                    />
-                    <button className="delete-mapping-btn" onClick={() => deleteColorMapping(idx)}>×</button>
-                  </div>
-                ))}
-              </div>
-              <button className="add-mapping-btn" onClick={addColorMapping}>
-                + Add Mapping
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

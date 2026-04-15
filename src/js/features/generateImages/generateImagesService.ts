@@ -15,3 +15,7 @@ export const debugLayerTree = (
 ): Promise<{ success: boolean; error?: string; layers?: string }> => {
   return evalTS("debugLayerTree", mockupFolder);
 };
+
+export const getSelectedLayerBounds = (): Promise<{ success: boolean; error?: string; name?: string; width?: number; height?: number; left?: number; top?: number }> => {
+  return evalTS("getSelectedLayerBounds");
+};

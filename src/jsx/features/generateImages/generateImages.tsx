@@ -246,3 +246,44 @@ export const replaceImageInMockup = (
     return { success: false, error: "Outer: " + e.toString() };
   }
 };
+
+export const getSelectedLayerBounds = (): { success: boolean; error?: string; name?: string; width?: number; height?: number; left?: number; top?: number } => {
+  try {
+    // @ts-ignore
+    var doc = app.activeDocument;
+    if (!doc) {
+      return { success: false, error: "No active document" };
+    }
+    
+    // @ts-ignore
+    var activeLayer = doc.activeLayer;
+    if (!activeLayer) {
+      return { success: false, error: "No active layer selected" };
+    }
+    
+    var bounds = activeLayer.bounds;
+    // Extract numeric values from UnitValue objects (e.g., "500 px" -> 500)
+    // @ts-ignore
+    var left = parseFloat(bounds[0].toString());
+    // @ts-ignore
+    var top = parseFloat(bounds[1].toString());
+    // @ts-ignore
+    var right = parseFloat(bounds[2].toString());
+    // @ts-ignore
+    var bottom = parseFloat(bounds[3].toString());
+    
+    var width = right - left;
+    var height = bottom - top;
+    
+    return { 
+      success: true, 
+      name: activeLayer.name, 
+      width: width, 
+      height: height,
+      left: left,
+      top: top
+    };
+  } catch (e: any) {
+    return { success: false, error: e.toString() };
+  }
+};
