@@ -1,7 +1,7 @@
-import { Order } from "../../shared/shared";
+import { Order } from "../../../shared/shared";
 
 const DPI = 300;
-const BORDER_TOP_MM = 1.5; // Slightly reduced to fit more
+const BORDER_TOP_MM = 1.5;
 const BORDER_BOTTOM_MM = 1.5;
 const DEFAULT_BORDER_LEFT_MM = 10;
 const BORDER_RIGHT_MM = 1.5;
@@ -50,7 +50,6 @@ export const generateBatch = (orders: Order[]) => {
         successfullyPlaced = 0;
       }
 
-      // Calculate dynamic border height for layout (Top + Bottom + Artwork)
       const totalH_mm = order.width_mm + BORDER_TOP_MM + BORDER_BOTTOM_MM;
       const totalH_px = mmToPx(totalH_mm, DPI);
 
@@ -124,14 +123,12 @@ const placeOrderDesign = (doc: any, order: Order, yOffset: number, dpi: number) 
 
     doc.activeLayer = designLayer;
 
-    // Target (Artwork) dimensions
     const artW_px = mmToPx(order.length_mm, dpi);
     const artH_px = mmToPx(order.width_mm, dpi);
 
     let preRotateW = Number(designLayer.bounds[2]) - Number(designLayer.bounds[0]);
     let preRotateH = Number(designLayer.bounds[3]) - Number(designLayer.bounds[1]);
 
-    // Auto-rotate if image is portrait
     if (preRotateH > preRotateW) {
       //@ts-ignore
       designLayer.rotate(90, AnchorPosition.MIDDLECENTER);
@@ -140,24 +137,19 @@ const placeOrderDesign = (doc: any, order: Order, yOffset: number, dpi: number) 
     const currentImageW = Number(designLayer.bounds[2]) - Number(designLayer.bounds[0]);
     const currentImageH = Number(designLayer.bounds[3]) - Number(designLayer.bounds[1]);
 
-    // CALCULATE FILL & CROP RATIO
     const targetRatio = artW_px / artH_px;
     const imageRatio = currentImageW / currentImageH;
 
     let scaleFactorPercent = 100;
     if (imageRatio > targetRatio) {
-      // Image is wider than target area. Fill based on height.
       scaleFactorPercent = (artH_px / currentImageH) * 100;
     } else {
-      // Image is taller or perfectly matched. Fill based on width.
       scaleFactorPercent = (artW_px / currentImageW) * 100;
     }
 
-    // Proportional resize (Cover logic)
     //@ts-ignore
     designLayer.resize(scaleFactorPercent, scaleFactorPercent, AnchorPosition.TOPLEFT);
 
-    // BORDER CALCULATION
     const labelCombined = `${order.model} (${order.variant})`;
     const isLong = labelCombined.length > 25;
     const borderLeft_mm = isLong ? 20 : DEFAULT_BORDER_LEFT_MM;
@@ -167,28 +159,22 @@ const placeOrderDesign = (doc: any, order: Order, yOffset: number, dpi: number) 
     const xArtworkStart = xStart + mmToPx(borderLeft_mm, dpi);
     const yArtworkStart = yOffset + mmToPx(BORDER_TOP_MM, dpi);
 
-    // MIRROR IF REQUESTED (Vertical Mirror)
     if (order.mirror) {
       //@ts-ignore
       designLayer.resize(100, -100, AnchorPosition.MIDDLECENTER);
     }
 
-    // Capture bounds relative to current state
     const scaledBounds = designLayer.bounds;
     const scaledW = Number(scaledBounds[2]) - Number(scaledBounds[0]);
     const scaledH = Number(scaledBounds[3]) - Number(scaledBounds[1]);
 
-    // X: Always Align Left (vertical mirror keeps logo on the left)
     const targetTranslateX = xArtworkStart - Number(scaledBounds[0]);
     
-    // Y: Center Vertically (distribute height overflow equally)
     const yOverflow = scaledH - artH_px;
     const targetTranslateY = (yArtworkStart - (yOverflow / 2)) - Number(scaledBounds[1]);
 
     designLayer.translate(Math.round(targetTranslateX), Math.round(targetTranslateY));
 
-    // HARD CROP TO FRAME (selection based)
-    // Select the target rectangle and invert to clear everything else for this layer
     const cropRegion = [
       [xArtworkStart, yArtworkStart],
       [xArtworkStart + artW_px, yArtworkStart],
@@ -231,9 +217,8 @@ const addExternalBorder = (doc: any, layer: any, hexColor: string, borderLeft_mm
     selectionLayer.move(layer, ElementPlacement.PLACEAFTER);
     doc.selection.select(borderRegion);
 
-    // Robust hex to RGB conversion
     const hex = (hexColor || "#0078d4").replace("#", "");
-    let r = 0, g = 120, b = 212; // Default blue
+    let r = 0, g = 120, b = 212;
 
     if (hex.length === 6) {
       r = parseInt(hex.substring(0, 2), 16);
@@ -245,7 +230,6 @@ const addExternalBorder = (doc: any, layer: any, hexColor: string, borderLeft_mm
       b = parseInt(hex[2] + hex[2], 16);
     }
 
-    // Shield against NaN (invalid input like "INV" being typed into the field)
     if (isNaN(r) || isNaN(g) || isNaN(b)) {
       r = 0; g = 120; b = 212;
     }
@@ -259,7 +243,6 @@ const addExternalBorder = (doc: any, layer: any, hexColor: string, borderLeft_mm
     doc.selection.fill(color);
     doc.selection.deselect();
   } catch (e) {
-    // Ignore border errors
   }
 };
 
@@ -274,25 +257,20 @@ const addLabels = (doc: any, layer: any, order: Order, borderLeft_mm: number) =>
     const isLong = labelFull.length > 25;
 
     if (isLong) {
-      // Create two lines: Model and (Variant)
       const line1 = order.model;
       const line2 = `(${order.variant})`;
       
       const layer1 = createLabelLayer(doc, line1, 14);
       const layer2 = createLabelLayer(doc, line2, 14);
 
-      // Position side-by-side (vertically stacked since rotated)
-      // Offset by 3.5mm left/right of the border center for balanced spacing
       const offsetX = mmToPx(3.5, DPI);
       positionLabel(layer1, borderCenterX - offsetX, designY_Center);
       positionLabel(layer2, borderCenterX + offsetX, designY_Center);
     } else {
-      // Single line
       const labelLayer = createLabelLayer(doc, labelFull, 14);
       positionLabel(labelLayer, borderCenterX, designY_Center);
     }
   } catch (e) {
-    // Ignore label errors
   }
 };
 

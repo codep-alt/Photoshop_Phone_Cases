@@ -1,10 +1,7 @@
-import { fs, path } from "./cep/node";
-import { Order, Mapping, Dimension, OrderStats } from "../../shared/shared";
+import { fs, path } from "../../lib/cep/node";
+import { Order, Mapping, Dimension, OrderStats } from "../../../shared/shared";
 import * as XLSX from "xlsx";
 
-/**
- * Refined Auditor Logic (Brand-based Routing & Fuzzy Filename Matching)
- */
 export async function auditOrders(
   ordersPath: string,
   dimensionsPath: string,
@@ -16,7 +13,6 @@ export async function auditOrders(
   const validOrders: Order[] = [];
 
   try {
-    // 1. Read and Parse Dimensions
     let dimensions: Dimension[] = [];
     
     if (dimensionsPath.toLowerCase().endsWith(".xlsx")) {
@@ -31,11 +27,8 @@ export async function auditOrders(
       dimensions = processRawRows(rows);
     }
 
-    // Sort dimensions by model name length (descending) 
-    // CRITICAL: Longer names like "iPhone 15 Pro" are checked before "iPhone 15"
     const sortedDims = [...dimensions].sort((a, b) => b.model.length - a.model.length);
 
-    // 2. Read and Parse Orders
     const ordersRaw = fs.readFileSync(ordersPath, "utf-8");
     const orderRows = parseCSV(ordersRaw);
     stats.total = orderRows.length;
@@ -51,8 +44,6 @@ export async function auditOrders(
       const titleRawValue = findKey("Title") || "";
       const variantRawValue = findKey("Variant") || "";
 
-      // A. Identify Shop via Brand (Preferred) or Order Prefix (Fallback)
-      // If Brand is "MT" and Folder is "MT", it will match.
       const mapping = mappings.find((m) => 
         brandRawValue.toLowerCase() === m.shop.toLowerCase() || 
         brandRawValue.toLowerCase() === m.folder.toLowerCase() ||
@@ -68,19 +59,15 @@ export async function auditOrders(
         continue;
       }
 
-      // B. Parse Title for Design & Raw Model string
       const titleParts = titleRawValue.split("-");
       const design = (titleParts[1] || "Default").trim();
       let rawModelText = (titleParts[0] || "").trim();
 
-      // Apply Clean Words to model text before matching
       cleanWords.forEach((word) => {
         const regex = new RegExp(word, "gi");
         rawModelText = rawModelText.replace(regex, "").trim();
       });
 
-      // C. Safe Model & Variant Lookup (Longest Match First)
-      // We check if the Title contains the Dimension model name.
       const dim = sortedDims.find((d) => 
         rawModelText.toLowerCase().includes(d.model.toLowerCase()) && 
         variantRawValue.toLowerCase().trim() === d.variant.toLowerCase().trim()
@@ -95,7 +82,6 @@ export async function auditOrders(
         continue;
       }
 
-      // D. Search for design image with Super-Fuzzy Normalization
       const imagePath = findImage(designsFolder, mapping.folder, design);
       if (!imagePath) {
         stats.skips.push({ 
@@ -126,9 +112,6 @@ export async function auditOrders(
   }
 }
 
-/**
- * Standardizes raw row data from Excel or CSV by finding the header row
- */
 function processRawRows(rows: any[][]): Dimension[] {
   if (rows.length < 2) return [];
   let headerIdx = -1;
@@ -187,7 +170,6 @@ function findImage(
 
   const files = fs.readdirSync(shopFolder);
   
-  // Normalization: Strip everything except letters and digits
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const normalizedTarget = normalize(designName);
 

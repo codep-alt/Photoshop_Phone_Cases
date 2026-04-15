@@ -2,7 +2,8 @@
 
 import { ns } from "../shared/shared";
 
-import * as phxs from "./phxs/phxs"; 
+import * as printing from "./features/printing/printing";
+import * as generateImages from "./features/generateImages/generateImages";
 
 //@ts-ignore
 const host = typeof $ !== "undefined" ? $ : window;
@@ -63,7 +64,9 @@ switch (getAppNameSafely()) {
   
   case "photoshop":
   case "photoshopbeta":
-    host[ns] = phxs;
+    host[ns] = {};
+    for (var prop in printing) { host[ns][prop] = printing[prop]; }
+    for (var prop in generateImages) { host[ns][prop] = generateImages[prop]; }
     break;
 
   }
@@ -71,7 +74,8 @@ switch (getAppNameSafely()) {
 const empty = {};
 // prettier-ignore
 export type Scripts = typeof empty
-  & typeof phxs 
+  & typeof printing
+  & typeof generateImages
   ;
 
 // https://extendscript.docsforadobe.dev/interapplication-communication/bridgetalk-class.html?highlight=bridgetalk#appname
