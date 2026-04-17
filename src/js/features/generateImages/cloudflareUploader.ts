@@ -1,16 +1,16 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 
 const R2_CONFIG = {
-  endpoint: "https://d7c94b29a462315ba2a012685c9c5b28.r2.cloudflarestorage.com",
+  endpoint: import.meta.env.R2_ENDPOINT || "https://d7c94b29a462315ba2a012685c9c5b28.r2.cloudflarestorage.com",
   region: "auto",
   credentials: {
-    accessKeyId: "b0442d58381e220d1df9041148dd1421",
-    secretAccessKey: "b10ec224cd2e67471bcfa65ff55e8192e4e6fb3585d1c85194d4db4b5617a099",
+    accessKeyId: import.meta.env.R2_ACCESS_KEY_ID || "b0442d58381e220d1df9041148dd1421",
+    secretAccessKey: import.meta.env.R2_SECRET_ACCESS_KEY || "b10ec224cd2e67471bcfa65ff55e8192e4e6fb3585d1c85194d4db4b5617a099",
   },
 };
 
-const BUCKET_NAME = "images";
-const PUBLIC_URL_BASE = "https://pub-624c1856794d494b96d7182115490cb3.r2.dev";
+const BUCKET_NAME = import.meta.env.R2_BUCKET_NAME || "images";
+const PUBLIC_URL_BASE = import.meta.env.R2_PUBLIC_URL_BASE || "https://pub-624c1856794d494b96d7182115490cb3.r2.dev";
 
 const s3Client = new S3Client(R2_CONFIG);
 

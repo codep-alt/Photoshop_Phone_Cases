@@ -486,10 +486,27 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
       const { fs } = await import("../lib/cep/node");
       const { orders, stats } = await auditGenerateImagesOrders(csvPath, masterPath, mockupsPath, designsPath);
 
-      stats.skips.forEach((skip) => {
-        const details = skip.details ? ` (${skip.details})` : "";
-        addLog(`SKIP [${skip.orderId}]: ${skip.reason}${details}`, "warning");
-      });
+      // Group skips by reason for cleaner logging
+      if (stats.skips.length > 0) {
+        const skipReasons = new Map<string, string[]>();
+        stats.skips.forEach((skip) => {
+          const key = `${skip.reason}:${skip.details || ""}`;
+          if (!skipReasons.has(key)) {
+            skipReasons.set(key, []);
+          }
+          skipReasons.get(key)!.push(skip.orderId);
+        });
+        
+        skipReasons.forEach((orderIds, key) => {
+          const [reason, details] = key.split(":");
+          const count = orderIds.length;
+          if (count === 1) {
+            addLog(`SKIP [${orderIds[0]}]: ${reason}${details ? ` (${details})` : ""}`, "warning");
+          } else {
+            addLog(`SKIPPED ${count} orders: ${reason}${details ? ` (${details})` : ""}`, "warning");
+          }
+        });
+      }
 
       addLog(`AUDIT COMPLETE: Found ${stats.total} total rows.`, "info");
       addLog(`VALID ORDERS: ${stats.valid} ready to process.`, "success");
@@ -681,6 +698,7 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
   const processSingleOrder = async (order: any, outputDir: string, csvFileName: string): Promise<boolean> => {
     const safeCsvName = csvFileName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "");
     const baseName = `${order.orderId}_${safeCsvName}`;
+    let allSucceeded = true;
 
     for (const mockup of order.mockupPaths) {
       const outputExt = mockup.isDirectCopy ? ".jpg" : ".png";
@@ -696,7 +714,8 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
       
       if (!result.success) {
         addLog(`    ${mockup.view} failed: ${result.error}`, "error");
-        return false;
+        allSucceeded = false;
+        continue; // Continue to next mockup instead of stopping
       }
       addLog(`    Uploading ${mockup.view} to R2...`, "info");
       const upload = await uploadToR2(viewOutput, `${order.orderId}/${baseName}_${safeViewName}${outputExt}`);
@@ -705,10 +724,11 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
         mockup.url = upload.url;
       } else {
         addLog(`    ${mockup.view} upload failed: ${upload.error}`, "error");
-        return false;
+        allSucceeded = false;
+        // Continue to next mockup
       }
     }
-    return true;
+    return allSucceeded;
   };
 
   const exportSingleFile = async (orders: any[], csvPath: string, outputDir: string): Promise<boolean> => {
@@ -727,6 +747,9 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
       const headers = rows[0].map((h: string) => String(h || "").trim());
       const dataRows = rows.slice(1);
 
+      // Log headers for debugging
+      addLog(`    CSV headers: ${headers.slice(0, 10).join(", ")}${headers.length > 10 ? "..." : ""}`, "info");
+
       let urlColumnIndex = headers.findIndex(h => h.toLowerCase().includes("image"));
       if (urlColumnIndex === -1) {
         urlColumnIndex = headers.length;
@@ -736,26 +759,60 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
         }
       }
 
+      // Try multiple column name patterns for order ID
+      const possibleIdColumns = ["internal_id", "order_id", "orderid", "id", "sku", "product_id", "productid"];
+      let orderIdColumnIdx = -1;
+      for (const colName of possibleIdColumns) {
+        const idx = headers.findIndex(h => h.toLowerCase() === colName.toLowerCase());
+        if (idx !== -1) {
+          orderIdColumnIdx = idx;
+          addLog(`    Found order ID column: "${headers[idx]}" at index ${idx}`, "info");
+          break;
+        }
+      }
+
+      if (orderIdColumnIdx === -1) {
+        addLog(`    WARNING: No order ID column found. Tried: ${possibleIdColumns.join(", ")}`, "warning");
+        addLog(`    Will try to match by row index instead.`, "info");
+      }
+
       const orderMap = new Map<string, any>();
       for (const order of orders) {
         orderMap.set(order.orderId, order);
       }
 
-      for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
-        const row = dataRows[rowIdx];
-        const internalIdIdx = headers.findIndex(h => h.toLowerCase() === "internal_id");
-        if (internalIdIdx === -1) continue;
-
-        const internalId = String(row[internalIdIdx] || "").trim();
-        const order = orderMap.get(internalId);
-        if (!order) continue;
-
-        const urls: string[] = [];
-        for (const mockup of order.mockupPaths) {
-          if (mockup.url) urls.push(mockup.url);
+      let matchedRows = 0;
+      
+      if (orderIdColumnIdx !== -1) {
+        // Match by order ID column
+        for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+          const row = dataRows[rowIdx];
+          const orderIdValue = String(row[orderIdColumnIdx] || "").trim();
+          const order = orderMap.get(orderIdValue);
+          
+          if (order) {
+            const urls: string[] = [];
+            for (const mockup of order.mockupPaths) {
+              if (mockup.url) urls.push(mockup.url);
+            }
+            row[urlColumnIndex] = urls.join(",");
+            matchedRows++;
+          }
         }
-        row[urlColumnIndex] = urls.join(",");
+      } else {
+        // Fallback: match by row index (first N orders to first N data rows)
+        for (let rowIdx = 0; rowIdx < Math.min(dataRows.length, orders.length); rowIdx++) {
+          const order = orders[rowIdx];
+          const urls: string[] = [];
+          for (const mockup of order.mockupPaths) {
+            if (mockup.url) urls.push(mockup.url);
+          }
+          dataRows[rowIdx][urlColumnIndex] = urls.join(",");
+          matchedRows++;
+        }
       }
+
+      addLog(`    Matched ${matchedRows}/${orders.length} orders to CSV rows`, "info");
 
       const newSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
       const newWorkbook = XLSX.utils.book_new();
@@ -763,6 +820,7 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
       const csvContent = XLSX.write(newWorkbook, { bookType: "csv", type: "string" });
       fs.writeFileSync(outputFile, csvContent, "utf8");
       
+      addLog(`    CSV exported: ${outputFile}`, "success");
       return true;
     } catch (e: any) {
       addLog(`    Export failed: ${e.message}`, "error");
@@ -898,10 +956,27 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
         try {
           const { orders, stats } = await auditGenerateImagesOrders(filePath, masterPath, mockupsPath, designsPath);
           
-          stats.skips.forEach((skip) => {
-            const details = skip.details ? ` (${skip.details})` : "";
-            addLog(`  SKIP [${skip.orderId}]: ${skip.reason}${details}`, "warning");
-          });
+          // Group skips by reason for cleaner logging
+          if (stats.skips.length > 0) {
+            const skipReasons = new Map<string, string[]>();
+            stats.skips.forEach((skip) => {
+              const key = `${skip.reason}:${skip.details || ""}`;
+              if (!skipReasons.has(key)) {
+                skipReasons.set(key, []);
+              }
+              skipReasons.get(key)!.push(skip.orderId);
+            });
+            
+            skipReasons.forEach((orderIds, key) => {
+              const [reason, details] = key.split(":");
+              const count = orderIds.length;
+              if (count === 1) {
+                addLog(`  SKIP [${orderIds[0]}]: ${reason}${details ? ` (${details})` : ""}`, "warning");
+              } else {
+                addLog(`  SKIPPED ${count} orders: ${reason}${details ? ` (${details})` : ""}`, "warning");
+              }
+            });
+          }
 
           if (orders.length === 0) {
             addLog(`  No valid orders found.`, "warning");
