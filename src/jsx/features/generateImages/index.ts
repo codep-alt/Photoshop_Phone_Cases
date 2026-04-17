@@ -1,1 +1,1 @@
-export { replaceImageInMockup, debugLayerTree } from "./generateImages";
+export { replaceImageInMockup, debugLayerTree, copyFileDirect } from "./generateImages";

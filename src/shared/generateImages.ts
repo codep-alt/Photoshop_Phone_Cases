@@ -3,6 +3,7 @@ export interface MasterRow {
   nlCategory1: string;
   nlCategory2: string;
   nlVariant: string;
+  variantCord: string;
   brand: string;
   views: string[];
 }
@@ -15,7 +16,7 @@ export interface GenerateImagesOrder {
   design: string;
   variant: string;
   designPath: string;
-  mockupPaths: { view: string; path: string; url?: string }[];
+  mockupPaths: { view: string; path: string; url?: string; isDirectCopy?: boolean }[];
   frontUrl?: string;
   backUrl?: string;
   sideUrl?: string;

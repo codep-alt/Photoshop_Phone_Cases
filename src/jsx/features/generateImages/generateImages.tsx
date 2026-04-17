@@ -247,6 +247,24 @@ export const replaceImageInMockup = (
   }
 };
 
+export const copyFileDirect = (
+  sourcePath: string,
+  outputPath: string
+): { success: boolean; error?: string } => {
+  try {
+    var sourceFile = new File(sourcePath);
+    if (!sourceFile.exists) {
+      return { success: false, error: "Source file not found: " + sourcePath };
+    }
+    
+    sourceFile.copy(outputPath);
+    
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.toString() };
+  }
+};
+
 export const getSelectedLayerBounds = (): { success: boolean; error?: string; name?: string; width?: number; height?: number; left?: number; top?: number } => {
   try {
     // @ts-ignore

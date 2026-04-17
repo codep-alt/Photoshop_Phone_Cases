@@ -56,6 +56,7 @@ export function loadMasterFile(masterPath: string): Map<string, MasterRow> {
         nlCategory1: getVal("NL_Category_1"),
         nlCategory2: getVal("NL_Category_2"),
         nlVariant,
+        variantCord: getVal("Variant_Cord"),
         brand: getVal("Brand"),
         views,
       });
@@ -122,7 +123,7 @@ export async function auditGenerateImagesOrders(
       const nlCategory1 = masterRow.nlCategory1;
       const nlCategory2 = masterRow.nlCategory2;
       const views = masterRow.views;
-      const masterVariant = masterRow.nlVariant;
+      const variantCord = masterRow.variantCord;
 
       const design = parseTitle(titleLong);
       if (!design) {
@@ -131,26 +132,28 @@ export async function auditGenerateImagesOrders(
       }
 
       const variant = nlVariant.split("_")[0] || "Solid";
-      const color = nlVariant.includes("_") ? nlVariant.split("_")[1] : "";
 
       let mockupDir: string;
-      const hasColorSuffix = masterVariant.includes("_");
-
-      if (hasColorSuffix) {
-        const colorFromVariant = masterVariant.split("_")[1];
-        mockupDir = findMockupDirWithCaseInsensitiveColor(mockupsBase, nlCategory1, variant, nlCategory2, colorFromVariant);
+      if (variantCord) {
+        mockupDir = findMockupDirWithCaseInsensitiveColor(mockupsBase, nlCategory1, variant, nlCategory2, variantCord);
       } else {
         mockupDir = path.join(mockupsBase, nlCategory1, variant, nlCategory2);
       }
 
-      const mockupPaths: { view: string; path: string }[] = [];
+      const mockupPaths: { view: string; path: string; isDirectCopy?: boolean }[] = [];
       for (const viewName of views) {
-        const mockupPath = path.join(mockupDir, `${viewName}.psd`);
+        let mockupPath = path.join(mockupDir, `${viewName}.psd`);
+        let isDirectCopy = false;
+        
         if (!fs.existsSync(mockupPath)) {
-          stats.skips.push({ orderId: internalId, reason: "Mockup not found", details: mockupPath });
-          continue;
+          mockupPath = path.join(mockupDir, `${viewName}.jpg`);
+          if (!fs.existsSync(mockupPath)) {
+            stats.skips.push({ orderId: internalId, reason: "Mockup not found", details: `${viewName}.psd/.jpg` });
+            continue;
+          }
+          isDirectCopy = true;
         }
-        mockupPaths.push({ view: viewName, path: mockupPath });
+        mockupPaths.push({ view: viewName, path: mockupPath, isDirectCopy });
       }
 
       if (mockupPaths.length === 0) {
@@ -172,7 +175,7 @@ export async function auditGenerateImagesOrders(
         orderId: internalId,
         brand,
         model: nlCategory2,
-        color,
+        color: variantCord,
         design,
         variant,
         designPath,
@@ -239,6 +242,29 @@ function findMockupDirWithCaseInsensitiveColor(
   }
 
   return path.join(baseDir, colorSearch);
+}
+
+export async function getBatchFiles(batchFolder: string): Promise<string[]> {
+  try {
+    const { fs, path } = await import("../../lib/cep/node");
+    
+    if (!fs.existsSync(batchFolder)) {
+      throw new Error("Batch folder not found: " + batchFolder);
+    }
+
+    const files = fs.readdirSync(batchFolder);
+    const batchFiles = files
+      .filter((f: string) => {
+        const ext = path.extname(f).toLowerCase();
+        return ext === ".csv" || ext === ".xlsx";
+      })
+      .sort((a: string, b: string) => a.localeCompare(b))
+      .map((f: string) => path.join(batchFolder, f));
+
+    return batchFiles;
+  } catch (err: any) {
+    throw new Error(`Failed to scan batch folder: ${err.message}`);
+  }
 }
 
 export async function exportOrdersWithUrls(

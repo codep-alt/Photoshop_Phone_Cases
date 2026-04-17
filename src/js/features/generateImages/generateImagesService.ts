@@ -10,6 +10,13 @@ export const replaceImageInMockup = (
   return evalTS("replaceImageInMockup", mockupPath, designImagePath, outputPath, viewName, colorHex || "");
 };
 
+export const copyFileDirect = (
+  sourcePath: string,
+  outputPath: string
+): Promise<{ success: boolean; error?: string }> => {
+  return evalTS("copyFileDirect", sourcePath, outputPath);
+};
+
 export const debugLayerTree = (
   mockupFolder: string
 ): Promise<{ success: boolean; error?: string; layers?: string }> => {

@@ -110,11 +110,15 @@ export async function uploadToR2(
 
     const fileBuffer = fs.readFileSync(filePath);
 
+    // Detect content type based on file extension
+    const ext = fileName.toLowerCase().split(".").pop();
+    const contentType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: fileName,
       Body: fileBuffer,
-      ContentType: "image/png",
+      ContentType: contentType,
     });
 
     await s3Client.send(command);

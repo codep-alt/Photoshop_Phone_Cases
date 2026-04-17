@@ -5,7 +5,7 @@ import {
   subscribeBackgroundColor,
 } from "../lib/utils/bolt";
 import { auditOrders, generateBatch, printAllDocuments } from "../features/printing";
-import { replaceImageInMockup, auditGenerateImagesOrders, debugLayerTree, getSelectedLayerBounds, uploadToR2, clearR2Prefix, clearAllR2, exportOrdersWithUrls } from "../features/generateImages";
+import { replaceImageInMockup, auditGenerateImagesOrders, debugLayerTree, getSelectedLayerBounds, uploadToR2, clearR2Prefix, clearAllR2, exportOrdersWithUrls, getBatchFiles, copyFileDirect } from "../features/generateImages";
 import { ColorMapping } from "../../shared/generateImages";
 import { Order, Mapping, OrderStats } from "../../shared/shared";
 import "./main.scss";
@@ -41,7 +41,7 @@ const DEFAULT_COLOR_MAPPINGS: ColorMapping[] = [
 
 export const App = () => {
   const [view, setView] = useState<"main" | "settings">("main");
-  const [activeTab, setActiveTab] = useState<"printing" | "generateImages">("printing");
+  const [activeTab, setActiveTab] = useState<"printing" | "generateImages" | "batchGenerate">("printing");
   const [bgColor, setBgColor] = useState("#282c34");
 
   useEffect(() => {
@@ -77,10 +77,17 @@ export const App = () => {
         >
           Generate Images
         </button>
+        <button
+          className={`tab-btn ${activeTab === "batchGenerate" ? "active" : ""}`}
+          onClick={() => setActiveTab("batchGenerate")}
+        >
+          Batch Generate
+        </button>
       </div>
 
       {activeTab === "printing" && <PrintingView bgColor={bgColor} onOpenSettings={() => setView("settings")} />}
       {activeTab === "generateImages" && <GenerateImagesView bgColor={bgColor} />}
+      {activeTab === "batchGenerate" && <BatchGenerateView bgColor={bgColor} />}
     </div>
   );
 };
@@ -354,14 +361,23 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
       }
 
       for (const mockup of testOrderData.mockupPaths) {
-        const viewOutput = path.join(outputDir, `${baseName}_${mockup.view}.png`);
-        const result = await replaceImageInMockup(mockup.path, testOrderData.designPath, viewOutput, mockup.view);
+        const outputExt = mockup.isDirectCopy ? ".jpg" : ".png";
+        const safeViewName = mockup.view.replace(/\s+/g, "_");
+        const viewOutput = path.join(outputDir, `${baseName}_${safeViewName}${outputExt}`);
+        let result;
+        
+        if (mockup.isDirectCopy) {
+          result = await copyFileDirect(mockup.path, viewOutput);
+        } else {
+          result = await replaceImageInMockup(mockup.path, testOrderData.designPath, viewOutput, mockup.view);
+        }
+        
         if (!result.success) {
           addLog(`  ${mockup.view} failed: ${result.error}`, "error");
         } else {
           addLog(`  ${mockup.view} saved: ${viewOutput}`, "success");
           addLog(`  Uploading ${mockup.view} to R2...`, "info");
-          const upload = await uploadToR2(viewOutput, `${testOrderData.orderId}/${baseName}_${mockup.view}.png`);
+          const upload = await uploadToR2(viewOutput, `${testOrderData.orderId}/${baseName}_${safeViewName}${outputExt}`);
           if (upload.success && upload.url) {
             addLog(`  ${mockup.view} URL: ${upload.url}`, "success");
             mockup.url = upload.url;
@@ -503,16 +519,23 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
         const baseName = `${order.orderId}_${order.design.replace(/[^a-zA-Z0-9]/g, "_")}`;
         const outputDir = path.join(outputPath);
 
-        await clearR2Prefix(`${order.orderId}/`);
-
         for (const mockup of order.mockupPaths) {
-          const viewOutput = path.join(outputDir, `${baseName}_${mockup.view}.png`);
-          const result = await replaceImageInMockup(mockup.path, order.designPath, viewOutput, mockup.view);
+          const outputExt = mockup.isDirectCopy ? ".jpg" : ".png";
+          const safeViewName = mockup.view.replace(/\s+/g, "_");
+          const viewOutput = path.join(outputDir, `${baseName}_${safeViewName}${outputExt}`);
+          let result;
+          
+          if (mockup.isDirectCopy) {
+            result = await copyFileDirect(mockup.path, viewOutput);
+          } else {
+            result = await replaceImageInMockup(mockup.path, order.designPath, viewOutput, mockup.view);
+          }
+          
           if (!result.success) {
             addLog(`  ${mockup.view} failed: ${result.error}`, "error");
           } else {
             addLog(`  Uploading ${mockup.view} to R2...`, "info");
-            const upload = await uploadToR2(viewOutput, `${order.orderId}/${baseName}_${mockup.view}.png`);
+            const upload = await uploadToR2(viewOutput, `${order.orderId}/${baseName}_${safeViewName}${outputExt}`);
             if (upload.success && upload.url) {
               addLog(`  ${mockup.view} URL: ${upload.url}`, "success");
               mockup.url = upload.url;
@@ -592,6 +615,392 @@ const GenerateImagesView = ({ bgColor }: { bgColor: string }) => {
         </button>
         <button className="generate-btn" disabled={isProcessing} onClick={handleGenerate}>
           {isProcessing ? "Processing..." : "Generate Images"}
+        </button>
+      </div>
+    </>
+  );
+};
+
+const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
+  const [batchFolder, setBatchFolder] = useState("");
+  const [masterPath, setMasterPath] = useState("");
+  const [mockupsPath, setMockupsPath] = useState("");
+  const [designsPath, setDesignsPath] = useState("");
+  const [outputPath, setOutputPath] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [logs, setLogs] = useState<{ text: string; type: "info" | "success" | "warning" | "error" }[]>([]);
+
+  useEffect(() => {
+    setBatchFolder(localStorage.getItem("batchFolder") || "");
+    setMasterPath(localStorage.getItem("genImagesMasterPath") || "");
+    setMockupsPath(localStorage.getItem("genImagesMockupsPath") || "");
+    setDesignsPath(localStorage.getItem("genImagesDesignsPath") || "");
+    setOutputPath(localStorage.getItem("genImagesOutputPath") || "");
+  }, []);
+
+  const clearOutputFolder = async (folderPath: string) => {
+    const { fs } = await import("../lib/cep/node");
+    if (!fs.existsSync(folderPath)) return;
+    const files = fs.readdirSync(folderPath);
+    files.forEach((file: string) => {
+      const filePath = path.join(folderPath, file);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        // Ignore errors
+      }
+    });
+  };
+
+  const addLog = (text: string, type: "info" | "success" | "warning" | "error" = "info") => {
+    setLogs((prev) => [{ text, type }, ...prev].slice(0, 200));
+  };
+
+  const handlePickFile = (
+    label: string,
+    setter: (val: string) => void,
+    key: string,
+    isFolder = false
+  ) => {
+    const msg = `Select ${label}`;
+    const result = (window.cep.fs.showOpenDialogEx || window.cep.fs.showOpenDialog)(
+      false,
+      isFolder,
+      msg,
+      ""
+    );
+    // @ts-ignore
+    if (result?.data?.length > 0) {
+      // @ts-ignore
+      const picked = decodeURIComponent(result.data[0].replace("file://", ""));
+      setter(picked);
+      localStorage.setItem(key, picked);
+    }
+  };
+
+  const processSingleOrder = async (order: any, outputDir: string, csvFileName: string): Promise<boolean> => {
+    const safeCsvName = csvFileName.replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_]/g, "");
+    const baseName = `${order.orderId}_${safeCsvName}`;
+
+    for (const mockup of order.mockupPaths) {
+      const outputExt = mockup.isDirectCopy ? ".jpg" : ".png";
+      const safeViewName = mockup.view.replace(/\s+/g, "_");
+      const viewOutput = path.join(outputDir, `${baseName}_${safeViewName}${outputExt}`);
+      let result;
+      
+      if (mockup.isDirectCopy) {
+        result = await copyFileDirect(mockup.path, viewOutput);
+      } else {
+        result = await replaceImageInMockup(mockup.path, order.designPath, viewOutput, mockup.view);
+      }
+      
+      if (!result.success) {
+        addLog(`    ${mockup.view} failed: ${result.error}`, "error");
+        return false;
+      }
+      addLog(`    Uploading ${mockup.view} to R2...`, "info");
+      const upload = await uploadToR2(viewOutput, `${order.orderId}/${baseName}_${safeViewName}${outputExt}`);
+      if (upload.success && upload.url) {
+        addLog(`    ${mockup.view} URL: ${upload.url}`, "success");
+        mockup.url = upload.url;
+      } else {
+        addLog(`    ${mockup.view} upload failed: ${upload.error}`, "error");
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const exportSingleFile = async (orders: any[], csvPath: string, outputDir: string): Promise<boolean> => {
+    try {
+      const { fs, path: pathModule } = await import("../lib/cep/node");
+      const XLSX = await import("xlsx");
+      const inputFileName = pathModule.basename(csvPath);
+      const baseName = inputFileName.replace(/\.(csv|xlsx)$/i, "");
+      const outputFile = pathModule.join(outputDir, `${baseName}_with_urls.csv`);
+
+      const buf = fs.readFileSync(csvPath);
+      const workbook = XLSX.read(buf, { type: "buffer" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+
+      const headers = rows[0].map((h: string) => String(h || "").trim());
+      const dataRows = rows.slice(1);
+
+      let urlColumnIndex = headers.findIndex(h => h.toLowerCase().includes("image"));
+      if (urlColumnIndex === -1) {
+        urlColumnIndex = headers.length;
+        headers.push("Image URL");
+        for (let i = 0; i < dataRows.length; i++) {
+          dataRows[i].push("");
+        }
+      }
+
+      const orderMap = new Map<string, any>();
+      for (const order of orders) {
+        orderMap.set(order.orderId, order);
+      }
+
+      for (let rowIdx = 0; rowIdx < dataRows.length; rowIdx++) {
+        const row = dataRows[rowIdx];
+        const internalIdIdx = headers.findIndex(h => h.toLowerCase() === "internal_id");
+        if (internalIdIdx === -1) continue;
+
+        const internalId = String(row[internalIdIdx] || "").trim();
+        const order = orderMap.get(internalId);
+        if (!order) continue;
+
+        const urls: string[] = [];
+        for (const mockup of order.mockupPaths) {
+          if (mockup.url) urls.push(mockup.url);
+        }
+        row[urlColumnIndex] = urls.join(",");
+      }
+
+      const newSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+      const newWorkbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(newWorkbook, newSheet, "Sheet1");
+      const csvContent = XLSX.write(newWorkbook, { bookType: "csv", type: "string" });
+      fs.writeFileSync(outputFile, csvContent, "utf8");
+      
+      return true;
+    } catch (e: any) {
+      addLog(`    Export failed: ${e.message}`, "error");
+      return false;
+    }
+  };
+
+  const handleTestBatch = async () => {
+    if (!batchFolder || !masterPath || !mockupsPath || !designsPath || !outputPath) {
+      addLog("Please select all paths first.", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Scanning batch folder...", "info");
+
+    try {
+      const batchFiles = await getBatchFiles(batchFolder);
+      
+      if (batchFiles.length === 0) {
+        addLog("No CSV/XLSX files found in batch folder.", "error");
+        setIsProcessing(false);
+        return;
+      }
+
+      addLog(`Found ${batchFiles.length} files to test.`, "info");
+      
+      // Clear output folder and R2 ONCE at start
+      addLog("Clearing output folder and R2...", "info");
+      await clearOutputFolder(outputPath);
+      const clearAllResult = await clearAllR2();
+      if (clearAllResult.success) {
+        addLog(`Cleared ${clearAllResult.deletedCount || 0} existing files from R2.`, "info");
+      } else {
+        addLog(`R2 clear failed: ${clearAllResult.error}`, "warning");
+      }
+
+      const summary = { filesProcessed: 0, ordersProcessed: 0, success: 0, failed: 0 };
+
+      for (const filePath of batchFiles) {
+        const fileName = path.basename(filePath);
+        const csvNameOnly = fileName.replace(/\.(csv|xlsx)$/i, "");
+        addLog(`=== Testing ${fileName} ===`, "info");
+
+        try {
+          const { orders, stats } = await auditGenerateImagesOrders(filePath, masterPath, mockupsPath, designsPath);
+          
+          if (orders.length === 0) {
+            addLog(`  No valid orders found.`, "warning");
+            continue;
+          }
+
+          const testOrder = orders[0];
+          addLog(`  Testing first order: ${testOrder.orderId}`, "info");
+          
+          const outputDir = path.join(outputPath);
+          const success = await processSingleOrder(testOrder, outputDir, csvNameOnly);
+          
+          if (success) {
+            summary.success++;
+            // Export single order result
+            await exportSingleFile([testOrder], filePath, outputDir);
+            addLog(`  Exported test result for ${fileName}`, "success");
+          } else {
+            summary.failed++;
+          }
+          
+          summary.filesProcessed++;
+          summary.ordersProcessed++;
+        } catch (e: any) {
+          addLog(`  Error: ${e.message}`, "error");
+          summary.failed++;
+        }
+      }
+
+      addLog("=== BATCH TEST SUMMARY ===", "success");
+      addLog(`Files processed: ${summary.filesProcessed}`, "success");
+      addLog(`Orders processed: ${summary.ordersProcessed}`, "success");
+      addLog(`Success: ${summary.success}`, "success");
+      addLog(`Failed: ${summary.failed}`, summary.failed > 0 ? "warning" : "success");
+    } catch (err: any) {
+      addLog(`Error: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGenerateAll = async () => {
+    if (!batchFolder || !masterPath || !mockupsPath || !designsPath || !outputPath) {
+      addLog("Please select all paths first.", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Scanning batch folder...", "info");
+
+    try {
+      const batchFiles = await getBatchFiles(batchFolder);
+      
+      if (batchFiles.length === 0) {
+        addLog("No CSV/XLSX files found in batch folder.", "error");
+        setIsProcessing(false);
+        return;
+      }
+
+      addLog(`Found ${batchFiles.length} files to process.`, "info");
+      
+      // Clear output folder and R2 ONCE at start
+      addLog("Clearing output folder and R2...", "info");
+      await clearOutputFolder(outputPath);
+      const clearAllResult = await clearAllR2();
+      if (clearAllResult.success) {
+        addLog(`Cleared ${clearAllResult.deletedCount || 0} existing files from R2.`, "info");
+      } else {
+        addLog(`R2 clear failed: ${clearAllResult.error}`, "warning");
+      }
+
+      const summary = { 
+        filesProcessed: 0, 
+        totalOrders: 0, 
+        success: 0, 
+        failed: 0,
+        errors: [] as string[]
+      };
+
+      for (const filePath of batchFiles) {
+        const fileName = path.basename(filePath);
+        const csvNameOnly = fileName.replace(/\.(csv|xlsx)$/i, "");
+        addLog(`=== Processing ${fileName} ===`, "info");
+
+        try {
+          const { orders, stats } = await auditGenerateImagesOrders(filePath, masterPath, mockupsPath, designsPath);
+          
+          stats.skips.forEach((skip) => {
+            const details = skip.details ? ` (${skip.details})` : "";
+            addLog(`  SKIP [${skip.orderId}]: ${skip.reason}${details}`, "warning");
+          });
+
+          if (orders.length === 0) {
+            addLog(`  No valid orders found.`, "warning");
+            continue;
+          }
+
+          const outputDir = path.join(outputPath);
+          
+          for (let i = 0; i < orders.length; i++) {
+            const order = orders[i];
+            addLog(`  [${i + 1}/${orders.length}] Processing ${order.orderId}...`, "info");
+            
+            const success = await processSingleOrder(order, outputDir, csvNameOnly);
+            
+            if (success) {
+              summary.success++;
+            } else {
+              summary.failed++;
+              summary.errors.push(`${fileName}: ${order.orderId}`);
+            }
+          }
+
+          // Export all orders for this file
+          await exportSingleFile(orders, filePath, outputDir);
+          addLog(`  Exported ${orders.length} orders for ${fileName}`, "success");
+          
+          summary.filesProcessed++;
+          summary.totalOrders += orders.length;
+        } catch (e: any) {
+          addLog(`  Error: ${e.message}`, "error");
+          summary.failed++;
+          summary.errors.push(`${fileName}: ${e.message}`);
+        }
+      }
+
+      addLog("=== BATCH GENERATE SUMMARY ===", "success");
+      addLog(`Files processed: ${summary.filesProcessed}/${batchFiles.length}`, "success");
+      addLog(`Total orders: ${summary.totalOrders}`, "success");
+      addLog(`Success: ${summary.success}`, "success");
+      addLog(`Failed: ${summary.failed}`, summary.failed > 0 ? "warning" : "success");
+      if (summary.errors.length > 0) {
+        addLog(`Errors:`, "warning");
+        summary.errors.forEach(err => addLog(`  - ${err}`, "warning"));
+      }
+    } catch (err: any) {
+      addLog(`Error: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="pickers-container">
+        <PickerItem
+          label="Batch Folder"
+          value={batchFolder}
+          isFolder
+          onPick={() => handlePickFile("Batch Folder", setBatchFolder, "batchFolder", true)}
+        />
+        <PickerItem
+          label="Master File"
+          value={masterPath}
+          onPick={() => handlePickFile("Master File", setMasterPath, "genImagesMasterPath")}
+        />
+        <PickerItem
+          label="Mockups Folder"
+          value={mockupsPath}
+          isFolder
+          onPick={() => handlePickFile("Mockups Folder", setMockupsPath, "genImagesMockupsPath", true)}
+        />
+        <PickerItem
+          label="Designs Folder"
+          value={designsPath}
+          isFolder
+          onPick={() => handlePickFile("Designs Folder", setDesignsPath, "genImagesDesignsPath", true)}
+        />
+        <PickerItem
+          label="Output Folder"
+          value={outputPath}
+          isFolder
+          onPick={() => handlePickFile("Output Folder", setOutputPath, "genImagesOutputPath", true)}
+        />
+      </div>
+
+      <div className="log-container">
+        {logs.map((log, i) => (
+          <div key={i} className={`log-entry ${log.type}`}>
+            {`> ${log.text}`}
+          </div>
+        ))}
+      </div>
+
+      <div className="generate-images-controls">
+        <button className="test-btn" disabled={isProcessing} onClick={handleTestBatch}>
+          Test Batch
+        </button>
+        <button className="generate-btn" disabled={isProcessing} onClick={handleGenerateAll}>
+          {isProcessing ? "Processing..." : "Generate All"}
         </button>
       </div>
     </>
