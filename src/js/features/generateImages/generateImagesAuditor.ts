@@ -324,9 +324,16 @@ export async function exportOrdersWithUrls(
     const newSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
     const newWorkbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(newWorkbook, newSheet, "Sheet1");
+
+    // Export CSV
     const csvContent = XLSX.write(newWorkbook, { bookType: "csv", type: "string" });
-    const outputFile = path.join(outputPath, "orders_with_urls.csv");
-    fs.writeFileSync(outputFile, csvContent, "utf8");
+    const csvOutputFile = path.join(outputPath, "orders_with_urls.csv");
+    fs.writeFileSync(csvOutputFile, csvContent, "utf8");
+
+    // Export XLSX with identical data
+    const xlsxContent = XLSX.write(newWorkbook, { bookType: "xlsx", type: "buffer" });
+    const xlsxOutputFile = path.join(outputPath, "orders_with_urls.xlsx");
+    fs.writeFileSync(xlsxOutputFile, xlsxContent);
 
     return { success: true, error: undefined };
   } catch (err: any) {

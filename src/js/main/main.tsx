@@ -5,7 +5,7 @@ import {
   subscribeBackgroundColor,
 } from "../lib/utils/bolt";
 import { auditOrders, generateBatch, printAllDocuments } from "../features/printing";
-import { replaceImageInMockup, auditGenerateImagesOrders, debugLayerTree, getSelectedLayerBounds, uploadToR2, clearR2Prefix, clearAllR2, exportOrdersWithUrls, getBatchFiles, copyFileDirect } from "../features/generateImages";
+import { auditGenerateImagesOrders, getSelectedLayerBounds, uploadToR2, clearAllR2, exportOrdersWithUrls, getBatchFiles, replaceImageInMockup, copyFileDirect, debugLayerTree } from "../features/generateImages";
 import { ColorMapping } from "../../shared/generateImages";
 import { Order, Mapping, OrderStats } from "../../shared/shared";
 import "./main.scss";
@@ -41,7 +41,7 @@ const DEFAULT_COLOR_MAPPINGS: ColorMapping[] = [
 
 export const App = () => {
   const [view, setView] = useState<"main" | "settings">("main");
-  const [activeTab, setActiveTab] = useState<"printing" | "generateImages" | "batchGenerate">("printing");
+  const [activeTab, setActiveTab] = useState<"printing" | "batchGenerate">("printing");
   const [bgColor, setBgColor] = useState("#282c34");
 
   useEffect(() => {
@@ -72,12 +72,6 @@ export const App = () => {
           Printing
         </button>
         <button
-          className={`tab-btn ${activeTab === "generateImages" ? "active" : ""}`}
-          onClick={() => setActiveTab("generateImages")}
-        >
-          Generate Images
-        </button>
-        <button
           className={`tab-btn ${activeTab === "batchGenerate" ? "active" : ""}`}
           onClick={() => setActiveTab("batchGenerate")}
         >
@@ -86,7 +80,6 @@ export const App = () => {
       </div>
 
       {activeTab === "printing" && <PrintingView bgColor={bgColor} onOpenSettings={() => setView("settings")} />}
-      {activeTab === "generateImages" && <GenerateImagesView bgColor={bgColor} />}
       {activeTab === "batchGenerate" && <BatchGenerateView bgColor={bgColor} />}
     </div>
   );
@@ -207,6 +200,53 @@ const PrintingView = ({ bgColor, onOpenSettings }: { bgColor: string; onOpenSett
     }
   };
 
+  const handleCheckOrders = async () => {
+    if (!ordersPath || !dimensionsPath || !designsPath) {
+      addLog("Please select all paths first.", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Checking orders for production batch...", "info");
+
+    try {
+      const cleanWordsList = cleanWords.split(",").map((w) => w.trim()).filter((w) => w);
+      const { orders, stats } = await auditOrders(
+        ordersPath,
+        dimensionsPath,
+        designsPath,
+        mappings,
+        cleanWordsList
+      );
+
+      // Summary first
+      addLog("=== ORDER AUDIT SUMMARY ===", "success");
+      addLog(`Total rows: ${stats.total}`, "info");
+      addLog(`Valid orders: ${orders.length}`, "success");
+      addLog(`Skipped orders: ${stats.skips.length}`, stats.skips.length > 0 ? "warning" : "success");
+
+      // Then detailed skip list (only if there are skips)
+      if (stats.skips.length > 0) {
+        addLog("", "info");
+        addLog("=== SKIPPED ORDERS DETAILS ===", "warning");
+        stats.skips.forEach((skip) => {
+          const details = skip.details ? ` (${skip.details})` : "";
+          addLog(`${skip.orderId}: ${skip.reason}${details}`, "warning");
+        });
+        addLog("", "info");
+        addLog(`Ready to print: ${orders.length} orders.`, "success");
+      } else {
+        addLog("", "info");
+        addLog(`Ready to print: ${orders.length} orders.`, "success");
+      }
+    } catch (err: any) {
+      addLog(`ERROR: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handlePrintOnly = async () => {
     try {
       addLog("Printing all open batch documents...", "info");
@@ -277,13 +317,16 @@ const PrintingView = ({ bgColor, onOpenSettings }: { bgColor: string; onOpenSett
           <button className="settings-btn" onClick={onOpenSettings}>
             ⚙️
           </button>
+          <button className="check-btn" disabled={isProcessing} onClick={handleCheckOrders}>
+            Check Orders
+          </button>
           <button className="print-tabs-btn" onClick={handlePrintOnly}>
             Print Open Tabs
           </button>
         </div>
       </div>
 
-      <button className="generate-btn" disabled={isProcessing} onClick={handleGenerate}>
+      <button className="generate-btn production-batch-btn" disabled={isProcessing} onClick={handleGenerate}>
         {isProcessing ? "Processing..." : "Generate Production Batch"}
       </button>
     </>
@@ -646,6 +689,19 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
   const [outputPath, setOutputPath] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [logs, setLogs] = useState<{ text: string; type: "info" | "success" | "warning" | "error" }[]>([]);
+  
+  // Two-phase processing state
+  const [auditResults, setAuditResults] = useState<{
+    batchFiles: string[];
+    fileAudits: {
+      fileName: string;
+      filePath: string;
+      orders: any[];
+      stats: { total: number; valid: number; skips: { orderId: string; reason: string; details?: string }[] };
+    }[];
+    totalSkips: number;
+    totalValid: number;
+  } | null>(null);
 
   useEffect(() => {
     setBatchFolder(localStorage.getItem("batchFolder") || "");
@@ -654,6 +710,11 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
     setDesignsPath(localStorage.getItem("genImagesDesignsPath") || "");
     setOutputPath(localStorage.getItem("genImagesOutputPath") || "");
   }, []);
+
+  // Clear audit results when paths change
+  useEffect(() => {
+    setAuditResults(null);
+  }, [batchFolder, masterPath, mockupsPath, designsPath, outputPath]);
 
   const clearOutputFolder = async (folderPath: string) => {
     const { fs } = await import("../lib/cep/node");
@@ -671,6 +732,26 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
 
   const addLog = (text: string, type: "info" | "success" | "warning" | "error" = "info") => {
     setLogs((prev) => [{ text, type }, ...prev].slice(0, 200));
+  };
+
+  const handleGetLayerBounds = async () => {
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Getting selected layer bounds...", "info");
+
+    try {
+      const result = await getSelectedLayerBounds();
+      if (result.success) {
+        addLog(`Layer: ${result.name}`, "info");
+        addLog(`Bounds: ${result.width}x${result.height} at (${result.left}, ${result.top})`, "info");
+      } else {
+        addLog("Get bounds failed: " + result.error, "error");
+      }
+    } catch (err: any) {
+      addLog(`Error: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handlePickFile = (
@@ -817,14 +898,102 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
       const newSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
       const newWorkbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(newWorkbook, newSheet, "Sheet1");
-      const csvContent = XLSX.write(newWorkbook, { bookType: "csv", type: "string" });
-      fs.writeFileSync(outputFile, csvContent, "utf8");
       
-      addLog(`    CSV exported: ${outputFile}`, "success");
+      // Export as CSV
+      const csvContent = XLSX.write(newWorkbook, { bookType: "csv", type: "string" });
+      const csvOutputFile = pathModule.join(outputDir, `${baseName}_with_urls.csv`);
+      fs.writeFileSync(csvOutputFile, csvContent, "utf8");
+      
+      // Export as XLSX
+      const xlsxContent = XLSX.write(newWorkbook, { bookType: "xlsx", type: "buffer" });
+      const xlsxOutputFile = pathModule.join(outputDir, `${baseName}_with_urls.xlsx`);
+      fs.writeFileSync(xlsxOutputFile, xlsxContent);
+      
+      addLog(`    CSV exported: ${csvOutputFile}`, "success");
+      addLog(`    XLSX exported: ${xlsxOutputFile}`, "success");
       return true;
     } catch (e: any) {
       addLog(`    Export failed: ${e.message}`, "error");
       return false;
+    }
+  };
+
+  const handleCheckOrders = async () => {
+    if (!batchFolder || !masterPath || !mockupsPath || !designsPath) {
+      addLog("Please select Batch Folder, Mockups Folder, and Designs Folder first.", "warning");
+      return;
+    }
+
+    setIsProcessing(true);
+    setLogs([]);
+    addLog("Scanning batch folder for order audit...", "info");
+
+    try {
+      const batchFiles = await getBatchFiles(batchFolder);
+      
+      if (batchFiles.length === 0) {
+        addLog("No CSV/XLSX files found in batch folder.", "error");
+        setIsProcessing(false);
+        return;
+      }
+
+      addLog(`Found ${batchFiles.length} files to audit.`, "info");
+      
+      const summary = { 
+        filesScanned: 0,
+        totalRows: 0,
+        totalValid: 0,
+        totalSkipped: 0,
+        skipDetails: [] as { file: string; orderId: string; reason: string; details?: string }[]
+      };
+
+      for (const filePath of batchFiles) {
+        const fileName = path.basename(filePath);
+
+        try {
+          const { orders, stats } = await auditGenerateImagesOrders(filePath, masterPath, mockupsPath, designsPath);
+          
+          summary.filesScanned++;
+          summary.totalRows += stats.total;
+          summary.totalValid += stats.valid;
+          summary.totalSkipped += stats.skips.length;
+
+          // Store skips for summary (don't log individually per file)
+          if (stats.skips.length > 0) {
+            stats.skips.forEach((skip) => {
+              summary.skipDetails.push({ file: fileName, ...skip });
+            });
+          }
+        } catch (e: any) {
+          addLog(`  Error auditing ${fileName}: ${e.message}`, "error");
+        }
+      }
+
+      // Summary first
+      addLog("=== ORDER AUDIT SUMMARY ===", "success");
+      addLog(`Files scanned: ${summary.filesScanned}`, "info");
+      addLog(`Total rows: ${summary.totalRows}`, "info");
+      addLog(`Valid orders: ${summary.totalValid}`, "success");
+      addLog(`Skipped orders: ${summary.totalSkipped}`, summary.totalSkipped > 0 ? "warning" : "success");
+      
+      // Then detailed skip list (only if there are skips)
+      if (summary.skipDetails.length > 0) {
+        addLog("", "info");
+        addLog("=== SKIPPED ORDERS DETAILS ===", "warning");
+        summary.skipDetails.forEach((skip) => {
+          const details = skip.details ? ` (${skip.details})` : "";
+          addLog(`[${skip.file}] ${skip.orderId}: ${skip.reason}${details}`, "warning");
+        });
+        addLog("", "info");
+        addLog(`Ready to process: ${summary.totalValid} orders.`, "success");
+      } else {
+        addLog("", "info");
+        addLog(`Ready to process: ${summary.totalValid} orders.`, "success");
+      }
+    } catch (err: any) {
+      addLog(`Error: ${err.message}`, "error");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -1071,8 +1240,14 @@ const BatchGenerateView = ({ bgColor }: { bgColor: string }) => {
       </div>
 
       <div className="generate-images-controls">
+        <button className="check-btn" disabled={isProcessing} onClick={handleCheckOrders}>
+          Check Orders
+        </button>
         <button className="test-btn" disabled={isProcessing} onClick={handleTestBatch}>
           Test Batch
+        </button>
+        <button className="gen-settings-btn" disabled={isProcessing} onClick={handleGetLayerBounds}>
+          Get Layer Bounds
         </button>
         <button className="generate-btn" disabled={isProcessing} onClick={handleGenerateAll}>
           {isProcessing ? "Processing..." : "Generate All"}

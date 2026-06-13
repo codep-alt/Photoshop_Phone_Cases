@@ -241,6 +241,35 @@ html, body, #app {
     }
   }
 
+  .production-batch-btn {
+    width: 100%;
+    margin-top: 16px;
+    padding: 18px 22px;
+    min-height: 58px;
+    background: #00e65c;
+    border: 1px solid #39ff86;
+    border-radius: 6px;
+    color: #06140a;
+    font-size: 1.05rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover:not(:disabled) {
+      background: #39ff86;
+      border-color: #7dffb3;
+      transform: translateY(-1px);
+    }
+
+    &:disabled {
+      background: #333;
+      border-color: #444;
+      color: #666;
+      cursor: not-allowed;
+      transform: none;
+    }
+  }
+
   .generate-images-controls {
     margin-top: 15px;
     display: flex;

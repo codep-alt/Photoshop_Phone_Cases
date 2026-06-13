@@ -27,8 +27,6 @@ export async function auditOrders(
       dimensions = processRawRows(rows);
     }
 
-    const sortedDims = [...dimensions].sort((a, b) => b.model.length - a.model.length);
-
     const ordersRaw = fs.readFileSync(ordersPath, "utf-8");
     const orderRows = parseCSV(ordersRaw);
     stats.total = orderRows.length;
@@ -68,9 +66,12 @@ export async function auditOrders(
         rawModelText = rawModelText.replace(regex, "").trim();
       });
 
-      const dim = sortedDims.find((d) => 
-        rawModelText.toLowerCase().includes(d.model.toLowerCase()) && 
-        variantRawValue.toLowerCase().trim() === d.variant.toLowerCase().trim()
+      const normalizedModel = normalizeModelText(rawModelText);
+      const normalizedVariant = normalizeVariantText(variantRawValue);
+
+      const dim = dimensions.find((d) =>
+        normalizeModelText(d.model) === normalizedModel &&
+        normalizeVariantText(d.variant) === normalizedVariant
       );
 
       if (!dim) {
@@ -158,6 +159,21 @@ function parseCSV(content: string): any[] {
     headers.forEach((h, i) => { if (h) obj[h] = row[i]; });
     return obj;
   });
+}
+
+function normalizeModelText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeVariantText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function findImage(
